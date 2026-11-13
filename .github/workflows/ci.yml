@@ -42,3 +42,109 @@ jobs:
       - name: Check widget is embedded
         run: |
           ls build/Build/Products/Release-iphoneos/MacBattery.app/PlugIns/MacBatteryWidget.appex
+
+  adhoc:
+    # Sideload lane: ad hoc IPA for registered iPhones, served from GitHub Pages via itms-services.
+    # Exists because a billing hold on the Apple Account blocks every TestFlight install.
+    # Archive is UNSIGNED on purpose: a cloud-signed archive mints a throwaway dev cert per run
+    # and trips the 10-certificate cap; exportArchive does the real signing.
+    name: Ad hoc IPA -> install page
+    runs-on: macos-26
+    timeout-minutes: 45
+    if: github.event_name != 'pull_request'
+    permissions:
+      contents: write
+      actions: write
+    concurrency:
+      group: adhoc-publish
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Write App Store Connect API key
+        env:
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/asc" "$HOME/private_keys"
+          printf '%s' "$ASC_KEY_P8" | base64 --decode > "$RUNNER_TEMP/asc/AuthKey.p8"
+          cp "$RUNNER_TEMP/asc/AuthKey.p8" "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project (iPhone only)
+        working-directory: .
+        run: |
+          sed -i '' "s/^    CURRENT_PROJECT_VERSION: .*/    CURRENT_PROJECT_VERSION: $GITHUB_RUN_NUMBER/" project.yml
+          xcodegen generate
+      - name: Archive (unsigned)
+        working-directory: .
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project MacBattery.xcodeproj \
+            -scheme MacBattery \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/MacBattery.xcarchive \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER
+      - name: Export ad hoc IPA (cloud signing)
+        working-directory: .
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+        run: |
+          set -o pipefail
+          xcodebuild -exportArchive \
+            -archivePath build/MacBattery.xcarchive \
+            -exportOptionsPlist ExportOptionsAdHoc.plist \
+            -exportPath build/adhoc \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath "$RUNNER_TEMP/asc/AuthKey.p8" \
+            -authenticationKeyID "$ASC_KEY_ID" \
+            -authenticationKeyIssuerID "$ASC_ISSUER_ID"
+          ls -la build/adhoc
+      - name: Publish install page to GitHub Pages
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p web/ipa
+          cp build/adhoc/*.ipa web/ipa/MacBattery.ipa
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/MacBattery.xcarchive/Products/Applications/MacBattery.app/Info.plist)
+          cat > web/ipa/manifest.plist <<EOF2
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict><key>items</key><array><dict>
+            <key>assets</key><array>
+              <dict><key>kind</key><string>software-package</string><key>url</key><string>https://assiamahs.github.io/macbattery/ipa/MacBattery.ipa</string></dict>
+              <dict><key>kind</key><string>display-image</string><key>url</key><string>https://assiamahs.github.io/macbattery/icon-180.png</string></dict>
+              <dict><key>kind</key><string>full-size-image</string><key>url</key><string>https://assiamahs.github.io/macbattery/icon-512.png</string></dict>
+            </array>
+            <key>metadata</key><dict>
+              <key>bundle-identifier</key><string>com.sylvester.macbattery</string>
+              <key>bundle-version</key><string>${VERSION}</string>
+              <key>kind</key><string>software</string>
+              <key>title</key><string>Mac Battery</string>
+            </dict>
+          </dict></array></dict></plist>
+          EOF2
+          # Lets the app itself check for updates (tools/UpdateCheck.swift).
+          printf '{"build":%s,"version":"%s","date":"%s"}\n' "$GITHUB_RUN_NUMBER" "$VERSION" "$(date -u +%Y-%m-%d)" > web/ipa/version.json
+          sed -i '' -E "s/Build [^·]*· [^·]*·/Build $GITHUB_RUN_NUMBER (v$VERSION) · $(date -u +%Y-%m-%d) ·/; s/BUILD_NUMBER/$GITHUB_RUN_NUMBER/; s/BUILD_DATE/$(date -u +%Y-%m-%d)/" web/install.html || true
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # never rebase binaries: start from origin/main each attempt and re-copy our outputs
+          for attempt in 1 2 3 4; do
+            git fetch -q origin main
+            git checkout -q -B main origin/main
+            mkdir -p web/ipa
+            cp build/adhoc/*.ipa web/ipa/MacBattery.ipa
+            git checkout -q origin/main -- web/install.html 2>/dev/null || true
+            sed -i '' -E "s/Build [^·]*· [^·]*·/Build $GITHUB_RUN_NUMBER (v$VERSION) · $(date -u +%Y-%m-%d) ·/; s/BUILD_NUMBER/$GITHUB_RUN_NUMBER/; s/BUILD_DATE/$(date -u +%Y-%m-%d)/" web/install.html || true
+            git add web/ipa web/install.html
+            git commit -q -m "build: ad hoc IPA build $GITHUB_RUN_NUMBER" || exit 0
+            git push -q origin HEAD:main && break
+            echo "push rejected, retrying ($attempt)"; sleep $((attempt * 5))
+          done
+          gh workflow run pages.yml --ref main
