@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "macbattery",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-01",
+  "account_id": "d91de3c21480b9b45c36aadc6aad5d12",
+  "workers_dev": true,
+  "preview_urls": false,
+  "observability": { "enabled": true },
+  "kv_namespaces": [
+    { "binding": "BATTERY", "id": "24efc16f10e24aaa8605f3855b533705" }
+  ]
+}
