@@ -6,6 +6,9 @@ struct BatteryRingView: View {
     var charging: Bool
     var stale: Bool
     var lineWidth: CGFloat = 6
+    /// SF Symbol in the middle; nil draws an empty slot (track only).
+    var symbol: String? = "laptopcomputer"
+    var name: String = "Mac"
 
     private var fraction: Double { min(max(Double(percent) / 100, 0), 1) }
 
@@ -24,12 +27,14 @@ struct BatteryRingView: View {
                 .trim(from: 0, to: fraction)
                 .stroke(ringColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
-            Image(systemName: "laptopcomputer")
-                .resizable()
-                .scaledToFit()
-                .fontWeight(.medium)
-                .padding(lineWidth * 2.6)
-                .foregroundStyle(stale ? Color.secondary : Color.primary)
+            if let symbol {
+                Image(systemName: symbol)
+                    .resizable()
+                    .scaledToFit()
+                    .fontWeight(.medium)
+                    .padding(lineWidth * 2.6)
+                    .foregroundStyle(stale ? Color.secondary : Color.primary)
+            }
         }
         .overlay(alignment: .top) {
             if charging && !stale {
@@ -42,7 +47,7 @@ struct BatteryRingView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Mac battery \(percent) percent\(charging ? ", charging" : "")\(stale ? ", not updated recently" : "")")
+        .accessibilityLabel(symbol == nil ? "Empty slot" : "\(name) battery \(percent) percent\(charging ? ", charging" : "")\(stale ? ", not updated recently" : "")")
     }
 }
 

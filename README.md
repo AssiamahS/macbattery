@@ -1,6 +1,13 @@
 # macbattery
 
-MacBook battery % on the iPhone Home Screen, styled like Apple's Batteries widget.
+iPhone, Apple Watch and MacBook battery on the iPhone Home Screen, styled like Apple's Batteries widget
+(medium = four rings in a row; small and Lock Screen = Mac only).
+
+| Slot | Where the number comes from |
+|------|-----------------------------|
+| iPhone | Read on the phone (`UIDevice`) each time the widget refreshes. Never leaves the device. |
+| Watch | iOS has no API for the paired watch, so the watch app (`Watch/`) posts its own level to the Worker. |
+| Mac | launchd reporter posts `pmset` output to the Worker every 2 minutes. |
 
 ```
 Mac (launchd, every 2 min)  --POST /battery-->  Cloudflare Worker + KV  <--GET /battery--  iPhone widget (every ~15 min)
@@ -12,8 +19,9 @@ Mac (launchd, every 2 min)  --POST /battery-->  Cloudflare Worker + KV  <--GET /
 |------|------|
 | `reporter/macbattery-report.sh` | Parses `pmset -g batt`, POSTs JSON with the `x-battery-secret` header. `--dry-run` prints the payload. |
 | `reporter/com.sly.macbattery.plist` + `install.sh` | launchd agent, `StartInterval` 120 s, logs to `~/Library/Logs/macbattery.log`. |
-| `worker/` | Worker `macbattery` (KV binding `BATTERY`). `GET /battery` is public and returns the latest report + `ageSeconds`. |
-| `App/`, `Widget/`, `Shared/`, `project.yml` | SwiftUI host app + WidgetKit extension (systemSmall, accessoryCircular). XcodeGen is the source of truth. |
+| `worker/` | Worker `macbattery` (KV binding `BATTERY`). `GET /batteries` returns every device, `GET /battery[/mac\|watch\|iphone]` one. Public reads, `POST` needs the secret. |
+| `App/`, `Widget/`, `Shared/`, `project.yml` | SwiftUI host app + WidgetKit extension (systemMedium, systemSmall, accessoryCircular). XcodeGen is the source of truth. |
+| `Watch/` | watchOS companion that reports the watch's level (on open and on background refresh, roughly every 15+ min as watchOS allows). |
 
 Endpoint: `https://macbattery.sylvesterassiamahpm.workers.dev/battery`
 
@@ -46,4 +54,12 @@ CI (`.github/workflows/ci.yml`, `macos-26`) only does unsigned device + simulato
    team QGMAWHX827 and the iPhone UDID to be in the ad hoc profile.
 2. Or, on any Mac with Xcode 26: `xcodegen generate`, open `MacBattery.xcodeproj`, pick the iPhone, Run.
 
-Then long-press the Home Screen, Edit, Add Widget, search "Mac Battery".
+Then long-press the Home Screen, Edit, Add Widget, search "Mac Battery", pick the wide one.
+
+### Watch slot
+
+The ad hoc build leaves the watch app out until the Watch's UDID is registered under the team, because an
+ad hoc profile without it fails the whole export. Once it is registered:
+`gh variable set WATCH_REGISTERED --body 1`, re-run CI, reinstall, then open Mac Battery on the watch once.
+The watch app's write key comes from the `REPORT_SECRET` repo secret at build time (same value as
+`~/.config/macbattery/secret`).

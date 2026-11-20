@@ -70,13 +70,23 @@ jobs:
           cp "$RUNNER_TEMP/asc/AuthKey.p8" "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8"
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Generate Xcode project (iPhone only)
+      - name: Generate Xcode project
         working-directory: .
+        env:
+          WATCH_REGISTERED: ${{ vars.WATCH_REGISTERED }}
         run: |
           sed -i '' "s/^    CURRENT_PROJECT_VERSION: .*/    CURRENT_PROJECT_VERSION: $GITHUB_RUN_NUMBER/" project.yml
+          # An ad hoc profile needs the Watch's UDID. Until it is registered (repo variable
+          # WATCH_REGISTERED=1) ship iPhone only, or the export fails for the whole app.
+          if [ "$WATCH_REGISTERED" != "1" ]; then
+            sed -i '' '/^      - target: MacBatteryWatch$/d' project.yml
+            echo "watch companion left out of this build"
+          fi
           xcodegen generate
       - name: Archive (unsigned)
         working-directory: .
+        env:
+          REPORT_SECRET: ${{ secrets.REPORT_SECRET }}
         run: |
           set -o pipefail
           xcodebuild archive \
@@ -86,7 +96,8 @@ jobs:
             -destination 'generic/platform=iOS' \
             -archivePath build/MacBattery.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-            CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER
+            CURRENT_PROJECT_VERSION=$GITHUB_RUN_NUMBER \
+            REPORT_SECRET="$REPORT_SECRET"
       - name: Export ad hoc IPA (cloud signing)
         working-directory: .
         env:

@@ -3,8 +3,10 @@ import WidgetKit
 
 struct BatteryEntry: TimelineEntry {
     let date: Date
-    let snapshot: BatterySnapshot?
+    let snapshots: [DeviceKind: BatterySnapshot]
 
+    /// The Mac drives the single-device families.
+    var snapshot: BatterySnapshot? { snapshots[.mac] }
     var stale: Bool { snapshot?.isStale(at: date) ?? true }
 }
 
@@ -17,7 +19,15 @@ struct BatteryProvider: TimelineProvider {
     private static let refresh: TimeInterval = 15 * 60
 
     func placeholder(in context: Context) -> BatteryEntry {
-        BatteryEntry(date: .now, snapshot: .preview)
+        BatteryEntry(date: .now, snapshots: BatterySnapshot.previewBoard)
+    }
+
+    /// Server reports (Mac, Watch) plus this iPhone read locally. nil = the server was unreachable.
+    private static func load() async -> (board: [DeviceKind: BatterySnapshot], reachable: Bool) {
+        let fetched = try? await BatteryAPI.fetchAll()
+        var board = fetched ?? [:]
+        if let phone = await LocalBattery.read() { board[.iphone] = phone }
+        return (board, fetched != nil)
     }
 
     func getSnapshot(in context: Context, completion: @escaping (BatteryEntry) -> Void) {
@@ -27,8 +37,9 @@ struct BatteryProvider: TimelineProvider {
         }
         let box = CompletionBox(call: completion)
         Task {
-            let snapshot = try? await BatteryAPI.fetch()
-            box.call(BatteryEntry(date: .now, snapshot: snapshot ?? .preview))
+            let loaded = await Self.load()
+            box.call(BatteryEntry(date: .now,
+                                  snapshots: loaded.reachable ? loaded.board : BatterySnapshot.previewBoard))
         }
     }
 
@@ -36,15 +47,18 @@ struct BatteryProvider: TimelineProvider {
         let box = CompletionBox(call: completion)
         Task {
             let now = Date.now
-            let snapshot = try? await BatteryAPI.fetch()
-            var entries = [BatteryEntry(date: now, snapshot: snapshot)]
-            // Flip the ring to grey on schedule if no newer report has arrived by then.
-            if let snapshot, !snapshot.isStale(at: now) {
-                let staleAt = snapshot.receivedAt.addingTimeInterval(BatterySnapshot.staleAfter + 1)
-                entries.append(BatteryEntry(date: staleAt, snapshot: snapshot))
+            let loaded = await Self.load()
+            let next = now.addingTimeInterval(loaded.reachable ? Self.refresh : 5 * 60)
+            var entries = [BatteryEntry(date: now, snapshots: loaded.board)]
+            // Flip a ring to grey on schedule if its device goes quiet before the next refresh.
+            let staleDates = loaded.board.values
+                .map { $0.staleDate.addingTimeInterval(1) }
+                .filter { $0 > now && $0 < next }
+                .sorted()
+            for date in staleDates {
+                entries.append(BatteryEntry(date: date, snapshots: loaded.board))
             }
-            let retry = snapshot == nil ? 5 * 60 : Self.refresh
-            box.call(Timeline(entries: entries, policy: .after(now.addingTimeInterval(retry))))
+            box.call(Timeline(entries: entries, policy: .after(next)))
         }
     }
 }
@@ -57,6 +71,9 @@ struct BatteryWidgetView: View {
         switch family {
         case .accessoryCircular:
             circular
+        case .systemMedium:
+            BatteryRowView(snapshots: entry.snapshots, date: entry.date)
+                .containerBackground(.fill.tertiary, for: .widget)
         default:
             small
         }
@@ -113,8 +130,8 @@ struct MacBatteryWidget: Widget {
             BatteryWidgetView(entry: entry)
         }
         .configurationDisplayName("Mac Battery")
-        .description("Your MacBook's battery level.")
-        .supportedFamilies([.systemSmall, .accessoryCircular])
+        .description("iPhone, Apple Watch and MacBook battery levels.")
+        .supportedFamilies([.systemMedium, .systemSmall, .accessoryCircular])
     }
 }
 
@@ -128,6 +145,12 @@ struct MacBatteryWidgetBundle: WidgetBundle {
 #Preview(as: .systemSmall) {
     MacBatteryWidget()
 } timeline: {
-    BatteryEntry(date: .now, snapshot: .preview)
-    BatteryEntry(date: .now.addingTimeInterval(3600), snapshot: .preview)
+    BatteryEntry(date: .now, snapshots: BatterySnapshot.previewBoard)
+    BatteryEntry(date: .now.addingTimeInterval(3600), snapshots: BatterySnapshot.previewBoard)
+}
+
+#Preview(as: .systemMedium) {
+    MacBatteryWidget()
+} timeline: {
+    BatteryEntry(date: .now, snapshots: BatterySnapshot.previewBoard)
 }

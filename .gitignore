@@ -4,3 +4,4 @@ DerivedData/
 .DS_Store
 worker/node_modules/
 worker/.wrangler/
+worker/.dev.vars

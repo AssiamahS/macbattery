@@ -11,7 +11,7 @@ struct MacBatteryApp: App {
 }
 
 struct ContentView: View {
-    @State private var snapshot: BatterySnapshot?
+    @State private var board: [DeviceKind: BatterySnapshot] = [:]
     @State private var errorText: String?
     @State private var loading = false
 
@@ -19,10 +19,13 @@ struct ContentView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 24) {
-                    if let snapshot {
+                    if let snapshot = board[.mac] {
                         TimelineView(.periodic(from: .now, by: 30)) { context in
                             let stale = snapshot.isStale(at: context.date)
                             VStack(spacing: 16) {
+                                BatteryRowView(snapshots: board, date: context.date)
+                                    .padding(.horizontal)
+                                    .padding(.bottom, 12)
                                 BatteryRingView(percent: snapshot.status.percent,
                                                 charging: snapshot.status.charging,
                                                 stale: stale, lineWidth: 16)
@@ -43,6 +46,13 @@ struct ContentView: View {
                     }
                     if let errorText {
                         Text(errorText).font(.footnote).foregroundStyle(.red)
+                    }
+                    if board[.watch] == nil && !loading {
+                        Text("Watch slot: open Mac Battery on the Apple Watch once so it starts reporting.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal)
                     }
                     Text("Add the widget: long-press the Home Screen, tap Edit, Add Widget, then search for Mac Battery.")
                         .font(.footnote)
@@ -66,7 +76,9 @@ struct ContentView: View {
         loading = true
         defer { loading = false }
         do {
-            snapshot = try await BatteryAPI.fetch()
+            var fresh = try await BatteryAPI.fetchAll()
+            if let phone = LocalBattery.read() { fresh[.iphone] = phone }
+            board = fresh
             errorText = nil
             WidgetCenter.shared.reloadAllTimelines()
         } catch {
