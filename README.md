@@ -17,6 +17,9 @@ Mac (launchd, every 2 min)  --POST /battery-->  Cloudflare Worker + KV  <--GET /
 
 Endpoint: `https://macbattery.sylvesterassiamahpm.workers.dev/battery`
 
+Live page (no app needed): `https://macbattery.sylvesterassiamahpm.workers.dev/` draws the same ring and
+re-polls every 30 s. In Safari: Share, Add to Home Screen. It is an icon that opens the ring, not a real widget.
+
 ## Mac setup
 
 ```sh
